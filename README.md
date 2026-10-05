@@ -10,7 +10,7 @@ On either computer, install Google Drive for desktop and sign in to the same Goo
 
 Use the folder and status controls to narrow the GIFs. Select one to view its animation. Press K for Keep, P for Pass, or U to clear a choice. The app never moves or deletes the source GIFs. Choices are stored in `review-decisions.json` and synced by Google Drive. The Export decisions button downloads a backup copy. **Copy kept GIFs** copies all Keep choices into the `Keep` folder without overwriting existing files.
 
-To use a move reference while reviewing, put Sprite Review beside ChatGPT and drag a GIF card or the large animated preview into ChatGPT's message box. The drag carries the original `.gif` file rather than the thumbnail or a temporary image link. If the receiving window does not accept the drag, select the GIF, click **Download GIF**, then attach that file in ChatGPT. ChatGPT may treat a GIF as a still image, so ask it to inspect the animation's frames and timing when that matters.
+To use a move reference while reviewing, select a GIF and let the **Send the move to GPT** frame sheet appear below its animated preview. Drag that sheet into ChatGPT's message box. It is a PNG with ordered frames and each shown frame's duration, which ChatGPT can preview as an image. GIFs with more than 24 frames are sampled across the whole animation and labeled as such. If the receiving window does not accept the drag, click **Download frame sheet** and attach the PNG. **Download GIF** still gives you the untouched original. The frame sheet is made locally in your browser; it is not uploaded to this site.
 
 Review from one computer at a time; let Google Drive finish syncing before switching computers. Click Refresh on the second computer to load the latest choices.
 

@@ -18,14 +18,17 @@
     section{padding:16px;min-width:0}.bar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:14px}
     #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:10px}
     .card{border:2px solid #31415d;background:#1c273b;border-radius:9px;padding:7px;text-align:left;color:inherit;overflow:hidden}
-    .card[draggable=true],#preview[draggable=true]{cursor:grab}
-    .card[draggable=true]:active,#preview[draggable=true]:active{cursor:grabbing}
+    #gptSheet[draggable=true]{cursor:grab}
+    #gptSheet[draggable=true]:active{cursor:grabbing}
     .card.active{border-color:#62beff;box-shadow:0 0 0 2px #255f91}.card img{width:100%;height:130px;object-fit:contain;image-rendering:pixelated;background:#111827;border-radius:5px}
     .name{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:5px}.badge{font-size:11px;color:#b8c9e9}
     aside{border-left:1px solid #34425c;background:#151d2c;padding:18px;position:sticky;top:68px;height:calc(100vh - 68px);overflow:auto}
     #preview{width:100%;height:300px;object-fit:contain;image-rendering:pixelated;background:#0d1220;border-radius:9px}
     #path{overflow-wrap:anywhere;color:#b8c9e9;font-size:13px;min-height:36px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
-    #dragHelp{color:#b8c9e9;font-size:13px;margin:8px 0}
+    #dragHelp,#sheetStatus{color:#b8c9e9;font-size:13px;margin:8px 0}
+    #gptPanel{border-top:1px solid #34425c;margin-top:16px;padding-top:12px}
+    #gptPanel h2{font-size:15px;margin:0 0 8px}
+    #gptSheet{width:100%;max-height:300px;object-fit:contain;background:#0d1220;border-radius:9px}
     #empty{padding:60px 20px;color:#bbcae2;text-align:center;border:1px dashed #4a5e7c;border-radius:10px}
     #help{color:#aab9d3;font-size:12px;margin-top:18px}.page{display:flex;align-items:center;gap:9px;margin-top:14px}
     @media(max-width:800px){main{display:block}aside{position:static;height:auto;border-left:0;border-top:1px solid #34425c}#preview{height:230px}}
@@ -56,7 +59,6 @@
     <aside>
       <img id="preview" alt="Selected GIF animation">
       <p id="path">Select a GIF to inspect its animation.</p>
-      <p id="dragHelp">Drag this animation or a GIF card into ChatGPT's message box. This sends the original GIF file. If the drop is rejected, use Download GIF and attach it.</p>
       <div class="actions">
         <button id="markKeep" class="keep" disabled>Keep · K</button>
         <button id="markPass" class="pass" disabled>Pass · P</button>
@@ -64,6 +66,13 @@
         <button id="downloadGif" disabled>Download GIF</button>
       </div>
       <p id="decision"></p>
+      <div id="gptPanel">
+        <h2>Send the move to GPT</h2>
+        <p id="dragHelp">Drag the frame sheet below into ChatGPT. It shows the move's poses in order, with frame numbers and timing, so ChatGPT can see more than the GIF's first image.</p>
+        <img id="gptSheet" alt="Frame-by-frame GIF reference" hidden>
+        <p id="sheetStatus">Select a GIF to make its frame sheet.</p>
+        <button id="downloadSheet" disabled>Download frame sheet</button>
+      </div>
       <p id="help">Arrow keys move between GIFs. K marks Keep, P marks Pass, U clears a choice. Your choices are written to <code>review-decisions.json</code> inside the chosen folder and sync with it. Copy kept GIFs places copies in Keep when you need files for production. Source GIFs and existing Keep files are never moved or deleted.</p>
     </aside>
   </main>
@@ -72,6 +81,7 @@
   const $ = id => document.getElementById(id);
   const PAGE_SIZE = 72;
   let root, entries = [], decisions = {}, view = [], selected = -1, page = 0, urls = [], previewUrl, selectedFile;
+  let sheetFile, sheetUrl, sheetBuildId = 0;
   const setStatus = text => { $('status').textContent = text; };
   const escapePath = parts => parts.join('/');
 
@@ -132,17 +142,73 @@
     previewUrl = null;
   }
 
-  function startGifDrag(event, file) {
+  function startFileDrag(event, file) {
     try {
       if (!file || !event.dataTransfer?.items?.add) throw new Error('File dragging is unavailable');
-      event.dataTransfer.clearData(); // Remove the image's temporary blob URL; send the actual GIF.
-      if (!event.dataTransfer.items.add(file)) throw new Error('The browser did not add the GIF');
+      event.dataTransfer.clearData(); // Remove the image's temporary blob URL.
+      if (!event.dataTransfer.items.add(file)) throw new Error('The browser did not add the file');
       event.dataTransfer.effectAllowed = 'copy';
       setStatus(`Dragging ${file.name}. Drop it in ChatGPT's message box.`);
     } catch {
       event.preventDefault();
-      setStatus('This browser could not drag the file. Select the GIF and use Download GIF instead.');
+      setStatus('This browser could not drag the frame sheet. Use Download frame sheet instead.');
     }
+  }
+
+  function clearSheet(message = 'Select a GIF to make its frame sheet.') {
+    sheetBuildId++;
+    if (sheetUrl) URL.revokeObjectURL(sheetUrl);
+    sheetUrl = null; sheetFile = null;
+    $('gptSheet').removeAttribute('src'); $('gptSheet').hidden = true; $('gptSheet').draggable = false;
+    $('downloadSheet').disabled = true; $('sheetStatus').textContent = message;
+  }
+
+  async function makeFrameSheet(file, entry, buildId) {
+    let decoder;
+    try {
+      if (!window.ImageDecoder || !await ImageDecoder.isTypeSupported('image/gif')) {
+        throw new Error('Frame extraction needs a current Chrome or Edge browser');
+      }
+      decoder = new ImageDecoder({data: await file.arrayBuffer(), type:'image/gif', preferAnimation:true});
+      await decoder.completed;
+      const total = decoder.tracks.selectedTrack?.frameCount || 0;
+      if (!total) throw new Error('No GIF frames were found');
+      const count = Math.min(total, 24);
+      const indices = Array.from({length:count}, (_,i) => total <= 24 ? i : Math.round(i*(total-1)/(count-1)));
+      const cols = 4, rows = Math.ceil(count/cols), cellW = 280, cellH = 230, headerH = 76;
+      const canvas = document.createElement('canvas');
+      canvas.width = cols*cellW; canvas.height = headerH+rows*cellH;
+      const ctx = canvas.getContext('2d');
+      ctx.fillStyle = '#101521'; ctx.fillRect(0,0,canvas.width,canvas.height);
+      ctx.fillStyle = '#eef3ff'; ctx.font = 'bold 22px system-ui';
+      ctx.fillText(`MOVE REFERENCE · ${file.name}`, 16,30,canvas.width-32);
+      ctx.font = '16px system-ui'; ctx.fillStyle = '#b8c9e9';
+      ctx.fillText(total > 24 ? `Selected poses: 24 of ${total} frames · shown in order` : `${total} frames · shown in order`,16,57);
+      ctx.imageSmoothingEnabled = false;
+      for (let i=0; i<indices.length; i++) {
+        if (buildId !== sheetBuildId) return;
+        const {image} = await decoder.decode({frameIndex:indices[i]});
+        try {
+          const x = (i%cols)*cellW, y = headerH+Math.floor(i/cols)*cellH;
+          ctx.fillStyle = '#1c273b'; ctx.fillRect(x+4,y+4,cellW-8,cellH-8);
+          const scale = Math.min((cellW-20)/image.displayWidth,(cellH-49)/image.displayHeight,2);
+          const w = Math.round(image.displayWidth*scale), h = Math.round(image.displayHeight*scale);
+          ctx.drawImage(image,x+(cellW-w)/2,y+8+(cellH-49-h)/2,w,h);
+          ctx.fillStyle = '#eef3ff'; ctx.font = '15px system-ui';
+          const duration = Number.isFinite(image.duration) ? ` · ${Math.round(image.duration/1000)} ms` : '';
+          ctx.fillText(`Frame ${indices[i]+1}/${total}${duration}`,x+12,y+cellH-15);
+        } finally { image.close(); }
+      }
+      const blob = await new Promise((resolve,reject) => canvas.toBlob(result => result ? resolve(result) : reject(new Error('Could not create PNG')), 'image/png'));
+      if (buildId !== sheetBuildId || view[selected] !== entry) return;
+      sheetFile = new File([blob], file.name.replace(/\.gif$/i,'')+'-frame-sheet.png', {type:'image/png'});
+      sheetUrl = URL.createObjectURL(sheetFile);
+      $('gptSheet').src = sheetUrl; $('gptSheet').hidden = false; $('gptSheet').draggable = true;
+      $('downloadSheet').disabled = false;
+      $('sheetStatus').textContent = total > 24 ? `Ready: 24 sampled poses from ${total} frames. Drag this sheet into ChatGPT.` : `Ready: all ${total} frames. Drag this sheet into ChatGPT.`;
+    } catch(error) {
+      if (buildId === sheetBuildId) $('sheetStatus').textContent = `Could not make frame sheet: ${error.message}`;
+    } finally { decoder?.close(); }
   }
 
   function render() {
@@ -162,8 +228,6 @@
       card.addEventListener('click',()=>select(page*PAGE_SIZE+index)); $('grid').append(card);
       entry.handle.getFile().then(async file => {
         if (!card.isConnected) return;
-        card.draggable = true;
-        card.addEventListener('dragstart', event => startGifDrag(event, file));
         try {
           const bitmap = await createImageBitmap(file);
           if (!card.isConnected) { bitmap.close(); return; }
@@ -187,7 +251,7 @@
 
   function clearPreview() {
     $('preview').removeAttribute('src'); $('path').textContent='Select a GIF to inspect its animation.'; $('decision').textContent='';
-    $('preview').draggable = false; selectedFile = null;
+    selectedFile = null; clearSheet();
     ['markKeep','markPass','clear','downloadGif'].forEach(id=>$(id).disabled=true);
   }
 
@@ -202,13 +266,16 @@
     $('decision').textContent = `Review: ${decisions[entry.path] || 'unreviewed'}`;
     ['markKeep','markPass','clear'].forEach(id=>$(id).disabled=false);
     if (previewUrl) URL.revokeObjectURL(previewUrl);
-    selectedFile = null; $('preview').draggable = false; $('downloadGif').disabled = true;
+    selectedFile = null; $('downloadGif').disabled = true;
+    clearSheet('Making frame sheet…');
+    const buildId = sheetBuildId;
     try {
       const file = await entry.handle.getFile();
       const url = URL.createObjectURL(file);
       if (view[selected] === entry) {
         previewUrl = url; selectedFile = file; $('preview').src = url;
-        $('preview').draggable = true; $('downloadGif').disabled = false;
+        $('downloadGif').disabled = false;
+        makeFrameSheet(file,entry,buildId);
       }
       else URL.revokeObjectURL(url);
     }
@@ -225,6 +292,12 @@
       setTimeout(() => URL.revokeObjectURL(url), 1000);
       setStatus(`Downloaded ${file.name}. Attach it in ChatGPT's message box.`);
     } catch(error) { setStatus(`Could not download GIF: ${error.message}`); }
+  }
+
+  function downloadFrameSheet() {
+    if (!sheetFile || !sheetUrl) return;
+    const link = document.createElement('a'); link.href = sheetUrl; link.download = sheetFile.name; link.click();
+    setStatus(`Downloaded ${sheetFile.name}. Attach it in ChatGPT's message box.`);
   }
 
   async function saveDecision(choice) {
@@ -282,8 +355,9 @@
   $('search').oninput=()=>{page=0;selected=-1;render()};
   $('prev').onclick=()=>{page--;selected=page*PAGE_SIZE;render()}; $('next').onclick=()=>{page++;selected=page*PAGE_SIZE;render()};
   $('markKeep').onclick=()=>saveDecision('keep'); $('markPass').onclick=()=>saveDecision('pass'); $('clear').onclick=()=>saveDecision(null);
-  $('preview').addEventListener('dragstart', event => startGifDrag(event, selectedFile));
+  $('gptSheet').addEventListener('dragstart', event => startFileDrag(event, sheetFile));
   $('downloadGif').onclick=downloadSelectedGif;
+  $('downloadSheet').onclick=downloadFrameSheet;
   document.addEventListener('keydown',event=>{
     if (['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName) || !view.length) return;
     if (event.key==='k') saveDecision('keep'); else if(event.key==='p') saveDecision('pass'); else if(event.key==='u') saveDecision(null);
