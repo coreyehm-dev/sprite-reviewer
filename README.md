@@ -8,7 +8,7 @@ The private library folder contains `Source/`, an optional preexisting `Keep/` f
 
 On either computer, install Google Drive for desktop and sign in to the same Google account. Wait until the library's `Source` folder appears in the local Google Drive folder. Open the published Sprite Review page in Chrome or Edge, click **Choose synced folder**, and select the folder containing `Source`. The browser may ask for folder read and write access.
 
-Use the folder and status controls to narrow the GIFs. Select one to view its animation. Press K for Keep, P for Pass, or U to clear a choice. The app never moves or deletes the GIFs. Choices are stored in `review-decisions.json` and synced by Google Drive. The Export decisions button downloads a backup copy.
+Use the folder and status controls to narrow the GIFs. Select one to view its animation. Press K for Keep, P for Pass, or U to clear a choice. The app never moves or deletes the source GIFs. Choices are stored in `review-decisions.json` and synced by Google Drive. The Export decisions button downloads a backup copy. **Copy kept GIFs** copies all Keep choices into the `Keep` folder without overwriting existing files.
 
 Review from one computer at a time; let Google Drive finish syncing before switching computers. Click Refresh on the second computer to load the latest choices.
 

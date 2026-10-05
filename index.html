@@ -36,6 +36,7 @@
     <span class="spacer"></span>
     <button id="reload" disabled>Refresh</button>
     <button id="export" disabled>Export decisions</button>
+    <button id="copyKept" disabled>Copy kept GIFs</button>
   </header>
   <main>
     <section>
@@ -58,7 +59,7 @@
         <button id="clear" disabled>Clear · U</button>
       </div>
       <p id="decision"></p>
-      <p id="help">Arrow keys move between GIFs. K marks Keep, P marks Pass, U clears a choice. Your choices are written to <code>review-decisions.json</code> inside the chosen folder and sync with it. Source GIFs and existing Keep files are never moved or deleted.</p>
+      <p id="help">Arrow keys move between GIFs. K marks Keep, P marks Pass, U clears a choice. Your choices are written to <code>review-decisions.json</code> inside the chosen folder and sync with it. Copy kept GIFs places copies in Keep when you need files for production. Source GIFs and existing Keep files are never moved or deleted.</p>
     </aside>
   </main>
   <script>
@@ -97,7 +98,7 @@
       await picked.getDirectoryHandle('Source');
       root = picked;
       await refresh();
-      $('reload').disabled = $('export').disabled = false;
+      $('reload').disabled = $('export').disabled = $('copyKept').disabled = false;
     } catch (error) {
       if (error.name !== 'AbortError') setStatus(error.name === 'NotFoundError' ? 'Choose the spritesorter folder that contains Source.' : `Could not open folder: ${error.message}`);
     }
@@ -214,7 +215,31 @@
     a.href=url; a.download='review-decisions-backup.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
   }
 
-  $('open').onclick=openFolder; $('reload').onclick=refresh; $('export').onclick=exportDecisions;
+  async function copyKept() {
+    if (!root) return;
+    try {
+      await readDecisions();
+      const kept = entries.filter(entry=>decisions[entry.path]==='keep');
+      let copied = 0, skipped = 0;
+      $('copyKept').disabled = true;
+      const keepRoot = await root.getDirectoryHandle('Keep',{create:true});
+      for (const entry of kept) {
+        const parts = entry.path.split('/');
+        let dir = keepRoot;
+        for (const part of parts.slice(0,-1)) dir = await dir.getDirectoryHandle(part,{create:true});
+        try { await dir.getFileHandle(parts.at(-1)); skipped++; continue; }
+        catch(error) { if (error.name !== 'NotFoundError') throw error; }
+        const dest = await dir.getFileHandle(parts.at(-1),{create:true});
+        const writer = await dest.createWritable();
+        await writer.write(await entry.handle.getFile()); await writer.close(); copied++;
+        setStatus(`Copying kept GIFs: ${copied + skipped} of ${kept.length}`);
+      }
+      setStatus(`Copied ${copied} kept GIFs; ${skipped} were already in Keep.`);
+    } catch(error) { setStatus(`Could not finish copying kept GIFs: ${error.message}`); }
+    finally { $('copyKept').disabled = false; }
+  }
+
+  $('open').onclick=openFolder; $('reload').onclick=refresh; $('export').onclick=exportDecisions; $('copyKept').onclick=copyKept;
   $('folder').onchange=()=>{page=0;selected=-1;render()}; $('filter').onchange=()=>{page=0;selected=-1;render()};
   $('search').oninput=()=>{page=0;selected=-1;render()};
   $('prev').onclick=()=>{page--;selected=page*PAGE_SIZE;render()}; $('next').onclick=()=>{page++;selected=page*PAGE_SIZE;render()};
