@@ -1,0 +1,223 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="theme-color" content="#101521">
+  <title>Sprite Review</title>
+  <style>
+    :root{font:15px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;color:#eef3ff;background:#101521}
+    *{box-sizing:border-box}body{margin:0}button,input,select{font:inherit}button{cursor:pointer}
+    header{position:sticky;top:0;z-index:3;background:#171f30;border-bottom:1px solid #34425c;padding:12px 18px;display:flex;gap:12px;align-items:center;flex-wrap:wrap}
+    h1{font-size:19px;margin:0 14px 0 0}button{color:#eef3ff;background:#293650;border:1px solid #506384;border-radius:7px;padding:7px 12px}
+    button:hover{background:#394b6e}button:disabled{opacity:.45;cursor:default}.primary{background:#235d91}.keep{background:#265b43}.pass{background:#6a3941}
+    input,select{color:#eef3ff;background:#101521;border:1px solid #506384;border-radius:7px;padding:8px;min-width:0}
+    #search{width:220px}.spacer{flex:1}#status{color:#becbe2;font-size:13px}
+    main{display:grid;grid-template-columns:minmax(0,1fr) minmax(280px,360px);min-height:calc(100vh - 68px)}
+    section{padding:16px;min-width:0}.bar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:14px}
+    #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:10px}
+    .card{border:2px solid #31415d;background:#1c273b;border-radius:9px;padding:7px;text-align:left;color:inherit;overflow:hidden}
+    .card.active{border-color:#62beff;box-shadow:0 0 0 2px #255f91}.card img{width:100%;height:130px;object-fit:contain;image-rendering:pixelated;background:#111827;border-radius:5px}
+    .name{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:5px}.badge{font-size:11px;color:#b8c9e9}
+    aside{border-left:1px solid #34425c;background:#151d2c;padding:18px;position:sticky;top:68px;height:calc(100vh - 68px);overflow:auto}
+    #preview{width:100%;height:300px;object-fit:contain;image-rendering:pixelated;background:#0d1220;border-radius:9px}
+    #path{overflow-wrap:anywhere;color:#b8c9e9;font-size:13px;min-height:36px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+    #empty{padding:60px 20px;color:#bbcae2;text-align:center;border:1px dashed #4a5e7c;border-radius:10px}
+    #help{color:#aab9d3;font-size:12px;margin-top:18px}.page{display:flex;align-items:center;gap:9px;margin-top:14px}
+    @media(max-width:800px){main{display:block}aside{position:static;height:auto;border-left:0;border-top:1px solid #34425c}#preview{height:230px}}
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Sprite Review</h1>
+    <button id="open" class="primary">Choose synced folder</button>
+    <span id="status">Choose the folder containing Source and Keep.</span>
+    <span class="spacer"></span>
+    <button id="reload" disabled>Refresh</button>
+    <button id="export" disabled>Export decisions</button>
+  </header>
+  <main>
+    <section>
+      <div class="bar">
+        <select id="folder" aria-label="Folder"><option value="">All folders</option></select>
+        <select id="filter" aria-label="Review status"><option value="all">All</option><option value="unreviewed">Unreviewed</option><option value="keep">Keep</option><option value="pass">Pass</option></select>
+        <input id="search" type="search" placeholder="Search filename or folder" aria-label="Search GIFs">
+        <span id="count"></span>
+      </div>
+      <div id="grid"></div>
+      <div id="empty">Pick your synced <strong>spritesorter</strong> folder to begin. Use Chrome or Edge on Windows or Mac.</div>
+      <div class="page"><button id="prev" disabled>Previous</button><span id="page"></span><button id="next" disabled>Next</button></div>
+    </section>
+    <aside>
+      <img id="preview" alt="Selected GIF animation">
+      <p id="path">Select a GIF to inspect its animation.</p>
+      <div class="actions">
+        <button id="markKeep" class="keep" disabled>Keep · K</button>
+        <button id="markPass" class="pass" disabled>Pass · P</button>
+        <button id="clear" disabled>Clear · U</button>
+      </div>
+      <p id="decision"></p>
+      <p id="help">Arrow keys move between GIFs. K marks Keep, P marks Pass, U clears a choice. Your choices are written to <code>review-decisions.json</code> inside the chosen folder and sync with it. Source GIFs and existing Keep files are never moved or deleted.</p>
+    </aside>
+  </main>
+  <script>
+  'use strict';
+  const $ = id => document.getElementById(id);
+  const PAGE_SIZE = 72;
+  let root, entries = [], decisions = {}, view = [], selected = -1, page = 0, urls = [], previewUrl;
+  const setStatus = text => { $('status').textContent = text; };
+  const escapePath = parts => parts.join('/');
+
+  async function scan(dir, parts = []) {
+    for await (const [name, handle] of dir.entries()) {
+      if (handle.kind === 'directory') await scan(handle, [...parts, name]);
+      else if (/\.gif$/i.test(name)) entries.push({path: escapePath([...parts, name]), handle, folder: parts[0] || '(root)'});
+    }
+  }
+
+  async function readDecisions() {
+    try {
+      const handle = await root.getFileHandle('review-decisions.json');
+      const data = JSON.parse(await (await handle.getFile()).text());
+      decisions = data && typeof data.decisions === 'object' && !Array.isArray(data.decisions) ? data.decisions : {};
+    } catch (error) {
+      if (error.name !== 'NotFoundError') throw error;
+      decisions = {};
+    }
+  }
+
+  async function openFolder() {
+    if (!window.showDirectoryPicker) {
+      setStatus('Use current Chrome or Edge on Windows or Mac for folder access.');
+      return;
+    }
+    try {
+      const picked = await showDirectoryPicker({id:'sprite-review-library', mode:'readwrite'});
+      await picked.getDirectoryHandle('Source');
+      root = picked;
+      await refresh();
+      $('reload').disabled = $('export').disabled = false;
+    } catch (error) {
+      if (error.name !== 'AbortError') setStatus(error.name === 'NotFoundError' ? 'Choose the spritesorter folder that contains Source.' : `Could not open folder: ${error.message}`);
+    }
+  }
+
+  async function refresh() {
+    if (!root) return;
+    setStatus('Reading GIFs and decisions…');
+    entries = [];
+    try {
+      await scan(await root.getDirectoryHandle('Source'));
+      entries.sort((a,b) => a.path.localeCompare(b.path,undefined,{numeric:true}));
+      await readDecisions();
+      const folder = $('folder').value;
+      $('folder').replaceChildren(new Option('All folders',''));
+      [...new Set(entries.map(e => e.folder))].sort().forEach(name => $('folder').add(new Option(name,name)));
+      $('folder').value = [...$('folder').options].some(o => o.value === folder) ? folder : '';
+      page = 0; selected = -1; render();
+      setStatus(`${entries.length.toLocaleString()} GIFs in ${root.name}. Choices sync with this folder.`);
+    } catch (error) { setStatus(`Could not read library: ${error.message}`); }
+  }
+
+  function releaseUrls() {
+    urls.forEach(URL.revokeObjectURL); urls = [];
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    previewUrl = null;
+  }
+
+  function render() {
+    releaseUrls();
+    const q = $('search').value.trim().toLowerCase(), f = $('folder').value, status = $('filter').value;
+    view = entries.filter(e => (!f || e.folder === f) && (!q || e.path.toLowerCase().includes(q)) && (status === 'all' || (decisions[e.path] || 'unreviewed') === status));
+    const totalPages = Math.max(1,Math.ceil(view.length / PAGE_SIZE));
+    page = Math.min(page,totalPages-1);
+    $('grid').replaceChildren();
+    const portion = view.slice(page*PAGE_SIZE,(page+1)*PAGE_SIZE);
+    portion.forEach((entry,index) => {
+      const card = document.createElement('button'); card.className = 'card'; card.type = 'button';
+      const img = document.createElement('img'); img.alt = ''; img.loading = 'lazy';
+      const name = document.createElement('span'); name.className = 'name'; name.textContent = entry.path.split('/').at(-1);
+      const badge = document.createElement('span'); badge.className = 'badge'; badge.textContent = `${entry.folder} · ${decisions[entry.path] || 'unreviewed'}`;
+      card.append(img,name,badge); card.title = entry.path;
+      card.addEventListener('click',()=>select(page*PAGE_SIZE+index)); $('grid').append(card);
+      entry.handle.getFile().then(async file => {
+        if (!card.isConnected) return;
+        try {
+          const bitmap = await createImageBitmap(file);
+          if (!card.isConnected) { bitmap.close(); return; }
+          const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height;
+          canvas.getContext('2d').drawImage(bitmap,0,0); bitmap.close(); img.src = canvas.toDataURL('image/png');
+        } catch {
+          const url = URL.createObjectURL(file); urls.push(url); img.src = url;
+        }
+      }).catch(()=>{ badge.textContent = `${entry.folder} · failed to load`; });
+    });
+    $('count').textContent = `${view.length.toLocaleString()} shown`;
+    $('empty').hidden = view.length > 0;
+    $('page').textContent = view.length ? `Page ${page+1} of ${totalPages}` : '';
+    $('prev').disabled = page === 0; $('next').disabled = page >= totalPages-1;
+    if (selected < 0 || selected >= view.length) selected = view.length ? page*PAGE_SIZE : -1;
+    if (selected >= 0 && Math.floor(selected/PAGE_SIZE) === page) select(selected,false);
+    else clearPreview();
+  }
+
+  function clearPreview() {
+    $('preview').removeAttribute('src'); $('path').textContent='Select a GIF to inspect its animation.'; $('decision').textContent='';
+    ['markKeep','markPass','clear'].forEach(id=>$(id).disabled=true);
+  }
+
+  async function select(index, scroll = true) {
+    if (index < 0 || index >= view.length) return;
+    const targetPage = Math.floor(index/PAGE_SIZE);
+    if (targetPage !== page) { page = targetPage; selected = index; render(); return; }
+    selected = index;
+    [...$('grid').children].forEach((card,i)=>card.classList.toggle('active',i===index-page*PAGE_SIZE));
+    const card = $('grid').children[index-page*PAGE_SIZE]; if (scroll && card) card.scrollIntoView({block:'nearest'});
+    const entry = view[index]; $('path').textContent = entry.path;
+    $('decision').textContent = `Review: ${decisions[entry.path] || 'unreviewed'}`;
+    ['markKeep','markPass','clear'].forEach(id=>$(id).disabled=false);
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    try { previewUrl = URL.createObjectURL(await entry.handle.getFile()); if (view[selected] === entry) $('preview').src = previewUrl; }
+    catch(error) { $('decision').textContent = `Could not load GIF: ${error.message}`; }
+  }
+
+  async function saveDecision(choice) {
+    if (selected < 0 || !root) return;
+    const entry = view[selected];
+    try { await readDecisions(); } catch(error) { setStatus(`Could not read latest choices: ${error.message}`); return; }
+    const old = decisions[entry.path];
+    if (choice) decisions[entry.path] = choice; else delete decisions[entry.path];
+    try {
+      const handle = await root.getFileHandle('review-decisions.json',{create:true});
+      const writable = await handle.createWritable();
+      await writable.write(JSON.stringify({version:1,decisions},null,2)+'\n'); await writable.close();
+      setStatus(`Saved ${entry.path}: ${choice || 'unreviewed'}`);
+      const nextPath = view[selected+1]?.path;
+      render();
+      if (nextPath) { const next = view.findIndex(e=>e.path===nextPath); if (next>=0) select(next); }
+    } catch(error) {
+      if (old) decisions[entry.path]=old; else delete decisions[entry.path];
+      setStatus(`Could not save choice: ${error.message}. Export a backup before closing.`);
+    }
+  }
+
+  function exportDecisions() {
+    const blob = new Blob([JSON.stringify({version:1,decisions},null,2)+'\n'],{type:'application/json'});
+    const url = URL.createObjectURL(blob), a = document.createElement('a');
+    a.href=url; a.download='review-decisions-backup.json'; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+  }
+
+  $('open').onclick=openFolder; $('reload').onclick=refresh; $('export').onclick=exportDecisions;
+  $('folder').onchange=()=>{page=0;selected=-1;render()}; $('filter').onchange=()=>{page=0;selected=-1;render()};
+  $('search').oninput=()=>{page=0;selected=-1;render()};
+  $('prev').onclick=()=>{page--;selected=page*PAGE_SIZE;render()}; $('next').onclick=()=>{page++;selected=page*PAGE_SIZE;render()};
+  $('markKeep').onclick=()=>saveDecision('keep'); $('markPass').onclick=()=>saveDecision('pass'); $('clear').onclick=()=>saveDecision(null);
+  document.addEventListener('keydown',event=>{
+    if (['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName) || !view.length) return;
+    if (event.key==='k') saveDecision('keep'); else if(event.key==='p') saveDecision('pass'); else if(event.key==='u') saveDecision(null);
+    else if(event.key==='ArrowRight'||event.key==='ArrowDown'){select(Math.min(view.length-1,selected+1));event.preventDefault()}
+    else if(event.key==='ArrowLeft'||event.key==='ArrowUp'){select(Math.max(0,selected-1));event.preventDefault()}
+  });
+  </script>
+</body>
+</html>
