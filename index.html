@@ -4,6 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <meta name="theme-color" content="#101521">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src blob: data:; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'none'; form-action 'none'; base-uri 'none'">
   <title>Sprite Review</title>
   <style>
     :root{font:15px/1.4 system-ui,-apple-system,Segoe UI,sans-serif;color:#eef3ff;background:#101521}
@@ -152,7 +153,9 @@
         }
       }).catch(()=>{ badge.textContent = `${entry.folder} · failed to load`; });
     });
-    $('count').textContent = `${view.length.toLocaleString()} shown`;
+    const kept = entries.filter(e=>decisions[e.path]==='keep').length;
+    const passed = entries.filter(e=>decisions[e.path]==='pass').length;
+    $('count').textContent = `${view.length.toLocaleString()} shown · ${kept} kept · ${passed} passed · ${entries.length-kept-passed} left`;
     $('empty').hidden = view.length > 0;
     $('page').textContent = view.length ? `Page ${page+1} of ${totalPages}` : '';
     $('prev').disabled = page === 0; $('next').disabled = page >= totalPages-1;
@@ -177,7 +180,11 @@
     $('decision').textContent = `Review: ${decisions[entry.path] || 'unreviewed'}`;
     ['markKeep','markPass','clear'].forEach(id=>$(id).disabled=false);
     if (previewUrl) URL.revokeObjectURL(previewUrl);
-    try { previewUrl = URL.createObjectURL(await entry.handle.getFile()); if (view[selected] === entry) $('preview').src = previewUrl; }
+    try {
+      const url = URL.createObjectURL(await entry.handle.getFile());
+      if (view[selected] === entry) { previewUrl = url; $('preview').src = url; }
+      else URL.revokeObjectURL(url);
+    }
     catch(error) { $('decision').textContent = `Could not load GIF: ${error.message}`; }
   }
 
