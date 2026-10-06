@@ -18,8 +18,6 @@
     section{padding:16px;min-width:0}.bar{display:flex;align-items:center;gap:9px;flex-wrap:wrap;margin-bottom:14px}
     #grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(145px,1fr));gap:10px}
     .card{border:2px solid #31415d;background:#1c273b;border-radius:9px;padding:7px;text-align:left;color:inherit;overflow:hidden}
-    #gptSheet[draggable=true]{cursor:grab}
-    #gptSheet[draggable=true]:active{cursor:grabbing}
     .card.active{border-color:#62beff;box-shadow:0 0 0 2px #255f91}.card img{width:100%;height:130px;object-fit:contain;image-rendering:pixelated;background:#111827;border-radius:5px}
     .name{display:block;font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;margin-top:5px}.badge{font-size:11px;color:#b8c9e9}
     aside{border-left:1px solid #34425c;background:#151d2c;padding:18px;position:sticky;top:68px;height:calc(100vh - 68px);overflow:auto}
@@ -68,9 +66,10 @@
       <p id="decision"></p>
       <div id="gptPanel">
         <h2>Send the move to GPT</h2>
-        <p id="dragHelp">Drag the frame sheet below into ChatGPT. It shows the move's poses in order, with frame numbers and timing, so ChatGPT can see more than the GIF's first image.</p>
+        <p id="dragHelp">Click Copy frame sheet, then paste into your GPT chat (Ctrl+V on Windows or Cmd+V on Mac). The PNG shows the move's poses in order with frame numbers and timing. Dragging a picture from this page can attach only a link or an image placeholder.</p>
         <img id="gptSheet" alt="Frame-by-frame GIF reference" hidden>
         <p id="sheetStatus">Select a GIF to make its frame sheet.</p>
+        <button id="copySheet" class="primary" disabled>Copy frame sheet</button>
         <button id="downloadSheet" disabled>Download frame sheet</button>
       </div>
       <p id="help">Arrow keys move between GIFs. K marks Keep, P marks Pass, U clears a choice. Your choices are written to <code>review-decisions.json</code> inside the chosen folder and sync with it. Copy kept GIFs places copies in Keep when you need files for production. Source GIFs and existing Keep files are never moved or deleted.</p>
@@ -142,25 +141,12 @@
     previewUrl = null;
   }
 
-  function startFileDrag(event, file) {
-    try {
-      if (!file || !event.dataTransfer?.items?.add) throw new Error('File dragging is unavailable');
-      event.dataTransfer.clearData(); // Remove the image's temporary blob URL.
-      if (!event.dataTransfer.items.add(file)) throw new Error('The browser did not add the file');
-      event.dataTransfer.effectAllowed = 'copy';
-      setStatus(`Dragging ${file.name}. Drop it in ChatGPT's message box.`);
-    } catch {
-      event.preventDefault();
-      setStatus('This browser could not drag the frame sheet. Use Download frame sheet instead.');
-    }
-  }
-
   function clearSheet(message = 'Select a GIF to make its frame sheet.') {
     sheetBuildId++;
     if (sheetUrl) URL.revokeObjectURL(sheetUrl);
     sheetUrl = null; sheetFile = null;
-    $('gptSheet').removeAttribute('src'); $('gptSheet').hidden = true; $('gptSheet').draggable = false;
-    $('downloadSheet').disabled = true; $('sheetStatus').textContent = message;
+    $('gptSheet').removeAttribute('src'); $('gptSheet').hidden = true;
+    $('copySheet').disabled = true; $('downloadSheet').disabled = true; $('sheetStatus').textContent = message;
   }
 
   async function makeFrameSheet(file, entry, buildId) {
@@ -203,9 +189,9 @@
       if (buildId !== sheetBuildId || view[selected] !== entry) return;
       sheetFile = new File([blob], file.name.replace(/\.gif$/i,'')+'-frame-sheet.png', {type:'image/png'});
       sheetUrl = URL.createObjectURL(sheetFile);
-      $('gptSheet').src = sheetUrl; $('gptSheet').hidden = false; $('gptSheet').draggable = true;
-      $('downloadSheet').disabled = false;
-      $('sheetStatus').textContent = total > 24 ? `Ready: 24 sampled poses from ${total} frames. Drag this sheet into ChatGPT.` : `Ready: all ${total} frames. Drag this sheet into ChatGPT.`;
+      $('gptSheet').src = sheetUrl; $('gptSheet').hidden = false;
+      $('copySheet').disabled = false; $('downloadSheet').disabled = false;
+      $('sheetStatus').textContent = total > 24 ? `Ready: 24 sampled poses from ${total} frames. Copy and paste this sheet into GPT.` : `Ready: all ${total} frames. Copy and paste this sheet into GPT.`;
     } catch(error) {
       if (buildId === sheetBuildId) $('sheetStatus').textContent = `Could not make frame sheet: ${error.message}`;
     } finally { decoder?.close(); }
@@ -300,6 +286,21 @@
     setStatus(`Downloaded ${sheetFile.name}. Attach it in ChatGPT's message box.`);
   }
 
+  async function copyFrameSheet() {
+    if (!sheetFile) return;
+    if (!navigator.clipboard?.write || !window.ClipboardItem) {
+      setStatus('Image copying is unavailable in this browser. Use Download frame sheet and attach the PNG.');
+      return;
+    }
+    try {
+      await navigator.clipboard.write([new ClipboardItem({'image/png': sheetFile})]);
+      setStatus(`Copied ${sheetFile.name}. Paste into your GPT chat with Ctrl+V or Cmd+V.`);
+      $('sheetStatus').textContent = 'Copied! Paste into your GPT chat now.';
+    } catch (error) {
+      setStatus(`Could not copy the image: ${error.message}. Use Download frame sheet and attach the PNG.`);
+    }
+  }
+
   async function saveDecision(choice) {
     if (selected < 0 || !root) return;
     const entry = view[selected];
@@ -355,8 +356,9 @@
   $('search').oninput=()=>{page=0;selected=-1;render()};
   $('prev').onclick=()=>{page--;selected=page*PAGE_SIZE;render()}; $('next').onclick=()=>{page++;selected=page*PAGE_SIZE;render()};
   $('markKeep').onclick=()=>saveDecision('keep'); $('markPass').onclick=()=>saveDecision('pass'); $('clear').onclick=()=>saveDecision(null);
-  $('gptSheet').addEventListener('dragstart', event => startFileDrag(event, sheetFile));
+  $('gptSheet').addEventListener('dragstart', event => event.preventDefault());
   $('downloadGif').onclick=downloadSelectedGif;
+  $('copySheet').onclick=copyFrameSheet;
   $('downloadSheet').onclick=downloadFrameSheet;
   document.addEventListener('keydown',event=>{
     if (['INPUT','SELECT','TEXTAREA'].includes(document.activeElement.tagName) || !view.length) return;
